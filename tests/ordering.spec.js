@@ -1,7 +1,6 @@
 // @ts-check
 import { test, expect } from '@playwright/test';
 
-// Minimal relative-age parser for HN strings
 function parseRelAge(text, nowMs = Date.now()) {
   const s = String(text).trim().toLowerCase();
   if (s === 'just now') return nowMs;
@@ -9,12 +8,12 @@ function parseRelAge(text, nowMs = Date.now()) {
   const m = s.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/);
   if (!m) return Number.NaN;
   const n = Number(m[1]);
-  const unitMs = { second: 1e3, minute: 6e4, hour: 36e5, day: 864e5, week: 7*864e5, month: 30*864e5, year: 365*864e5 }[m[2]];
+  const unitMs = { second: 1e3, minute: 6e4, hour: 36e5, day: 864e5, week: 7 * 864e5, month: 30 * 864e5, year: 365 * 864e5 }[m[2]];
   return nowMs - n * unitMs;
 }
 
 test('timestamps are non-increasing across first two pages', async ({ page }) => {
-  await page.goto('/newest');
+  await page.goto('/newest', { waitUntil: 'domcontentloaded' });
 
   const collectPage = async () => {
     const rows = page.locator('tr.athing');
@@ -32,12 +31,13 @@ test('timestamps are non-increasing across first two pages', async ({ page }) =>
   };
 
   const page1 = await collectPage();
-  await page.getByRole('link', { name: 'More' }).click();
-  await page.waitForURL(/newest\?p=\d+/);
-
+  await Promise.all([
+    page.waitForURL(/newest\?p=\d+/, { waitUntil: 'domcontentloaded' }),
+    page.getByRole('link', { name: 'More' }).click()
+  ]);
   const page2 = await collectPage();
-  const all = page1.concat(page2);
 
+  const all = page1.concat(page2);
   for (let i = 1; i < all.length; i++) {
     expect(all[i]).toBeLessThanOrEqual(all[i - 1]);
   }

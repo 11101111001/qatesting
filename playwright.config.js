@@ -25,7 +25,8 @@ module.exports = defineConfig({
     actionTimeout: 15_000,
     screenshot: 'only-on-failure',
     video: 'off',
-    trace: 'retain-on-failure'
+    trace: 'retain-on-failure',
+    userAgent: 'Mozilla/5.0 ...'
   },
   projects: [
     {

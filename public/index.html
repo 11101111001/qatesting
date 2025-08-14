@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>HN Test Runner</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <link rel="icon" href="/favicon.ico" />
+</head>
+<body class="bg-gray-100">
+  <div id="app" class="max-w-4xl mx-auto p-6">
+    <h1 class="text-2xl font-bold mb-4">Hacker News Test Runner</h1>
+
+    <div class="mb-4 space-x-2">
+      <button @click="runAll"
+        class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+        Run All Tests
+      </button>
+      <button @click="runScraper"
+        class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+        Run Scraper
+      </button>
+    </div>
+
+    <div v-for="test in tests" :key="test.name" class="bg-white rounded shadow mb-3 p-4">
+      <div class="flex justify-between items-center">
+        <div class="font-medium">{{ test.name }}</div>
+        <div class="flex items-center space-x-2">
+          <span v-if="test.status==='idle'" class="text-gray-500">Idle</span>
+          <span v-if="test.status==='running'" class="text-yellow-500">⏳ Running</span>
+          <span v-if="test.status==='pass'" class="text-green-600">✅ Pass</span>
+          <span v-if="test.status==='fail'" class="text-red-600">❌ Fail</span>
+          <button @click="runTest(test.name)"
+            class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">
+            Run
+          </button>
+        </div>
+      </div>
+      <div v-if="test.logs.length" class="mt-3">
+        <button @click="test.showLogs = !test.showLogs" class="text-sm text-blue-600 hover:underline">
+          {{ test.showLogs ? 'Hide' : 'Show' }} Logs
+        </button>
+        <pre v-if="test.showLogs"
+          class="bg-black text-green-400 p-3 mt-2 rounded overflow-x-auto h-64 overflow-y-scroll">
+{{ test.logs.join('') }}
+        </pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

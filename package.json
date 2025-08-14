@@ -18,5 +18,8 @@
     "@playwright/test": "^1.54.2",
     "@types/node": "^24.2.1",
     "playwright": "^1.54.2"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
   }
 }
