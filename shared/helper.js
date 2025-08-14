@@ -113,9 +113,13 @@ async function collectItems(page, { limit = 100, verbose = true } = {}) {
 
     // Click "More" if we still need more items
     if (items.length < limit) {
-      const more = page.getByRole('link', { name: 'More' });
+      const more = page.locator('a.morelink[rel="next"]');
       await expect(more).toBeVisible();
-      await Promise.all([page.waitForNavigation(), more.click()]);
+      
+      await Promise.all([
+        page.waitForLoadState('domcontentloaded'),
+        more.click(),
+      ]);
     }
   }
 

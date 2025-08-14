@@ -13,8 +13,8 @@ test('"More" pagination changes first row', async ({ page }) => {
   await expect(firstRow).toBeVisible();
 
   const firstId = await firstRow.getAttribute('id');
-  await page.getByRole('link', { name: 'More' }).click();
-  await page.waitForURL(/newest\?p=\d+/, { waitUntil: 'domcontentloaded' });
+  await page.locator('a.morelink[rel="next"]').click();
+  await page.waitForURL(/\/newest(?:\?|$)/, { waitUntil: 'domcontentloaded' });
 
   const newFirstId = await page.locator('tr.athing').first().getAttribute('id');
   expect(newFirstId).not.toBe(firstId);
