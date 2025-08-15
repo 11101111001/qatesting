@@ -7,44 +7,58 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <link rel="icon" href="/favicon.ico" />
 </head>
-<body class="bg-gray-100">
+<body class="bg-gradient-to-tl from-[#c2410c] via-[#f97316] to-[#fdba74]">
   <div id="app" class="max-w-4xl mx-auto p-6">
     <h1 class="text-2xl font-bold mb-4">Hacker News Test Runner</h1>
 
     <div class="mb-4 space-x-2">
       <button @click="runAll"
-        class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+        class="px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600">
         Run All Tests
       </button>
-      <button @click="runScraper"
-        class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
-        Run Scraper
-      </button>
+      <button @click="resetAll" class="px-3 py-2 bg-gray-600 text-white rounded">Reset</button>
     </div>
 
-    <div v-for="test in tests" :key="test.name" class="bg-white rounded shadow mb-3 p-4">
-      <div class="flex justify-between items-center">
-        <div class="font-medium">{{ test.name }}</div>
-        <div class="flex items-center space-x-2">
-          <span v-if="test.status==='idle'" class="text-gray-500">Idle</span>
-          <span v-if="test.status==='running'" class="text-yellow-500">⏳ Running</span>
-          <span v-if="test.status==='pass'" class="text-green-600">✅ Pass</span>
-          <span v-if="test.status==='fail'" class="text-red-600">❌ Fail</span>
-          <button @click="runTest(test.name)"
-            class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600">
-            Run
-          </button>
+    <div v-for="t in tests" :key="t.name" class="border p-3 rounded mb-2 bg-white">
+        <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+        <div v-if="t.status==='running'" class="animate-spin h-4 w-4 border-2 border-t-transparent rounded-full"></div>
+            <span class="font-medium">{{ t.name }}</span>
+            <span class="text-sm text-gray-500" v-if="t.statusText">— {{ t.statusText }}</span>
         </div>
-      </div>
-      <div v-if="test.logs.length" class="mt-3">
-        <button @click="test.showLogs = !test.showLogs" class="text-sm text-blue-600 hover:underline">
-          {{ test.showLogs ? 'Hide' : 'Show' }} Logs
-        </button>
-        <pre v-if="test.showLogs"
-          class="bg-black text-green-400 p-3 mt-2 rounded overflow-x-auto h-64 overflow-y-scroll">
-{{ test.logs.join('') }}
-        </pre>
-      </div>
+
+        <div class="flex items-center gap-2">
+
+            <!-- Toggle Run / Abort -->
+            <button
+            v-if="t.status !== 'running'"
+            @click="runTest(t.name)"
+            class="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+            >
+            Run
+            </button>
+
+            <button
+                v-else
+                @click="abortTest(t.name)"
+                class="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
+            >
+                Abort
+            </button>
+
+            <!-- Show/Hide Logs -->
+            <button
+                @click="t.showLogs = !t.showLogs"
+                class="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300"
+            >
+                {{ t.showLogs ? 'Hide' : 'Show' }} Logs
+            </button>
+        </div>
+        </div>
+
+        <pre v-if="t.showLogs"
+            class="mt-2 bg-black text-green-400 p-3 rounded h-60 overflow-auto whitespace-pre-wrap">
+        {{ t.logs.join('\n') }}</pre>
     </div>
   </div>
 

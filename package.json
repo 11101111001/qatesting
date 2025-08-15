@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
+    "scrape": "node index.js --limit=50 --report report.md",
+    "start": "node server/index.js",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "report": "playwright show-report",

@@ -100,7 +100,7 @@ async function collectItems(page, { limit = 100, verbose = true } = {}) {
         ts = parseRelAge(rel, nowFixed);
         // Round to the nearest second to avoid ms jitter from nowFixed creation time
         ts = Math.floor(ts / 1000) * 1000;
-        isoOut = new Date(ts).toISOString();
+        iso = new Date(ts).toISOString();
       }
 
       if (verbose) {

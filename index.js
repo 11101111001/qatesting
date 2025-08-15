@@ -1,19 +1,24 @@
-// index.js
-// CLI entrypoint required by the take-home: `node index.js`
-// Uses Playwright (core lib) + our locator-based helper.
-// Produces an exit code and optional artifacts for a clean demo.
+#!/usr/bin/env node
+'use strict';
 
-const { chromium } = require('playwright'); // ensure `playwright` is installed (in addition to @playwright/test)
+// Root CLI runner for the take-home. Keeps output simple and CI-friendly.
+// Usage:
+//   node index.js --limit=50 --report report.md
+//   node index.js --headless=false --verbose --screenshot newest.png
+
+const { chromium } = require('playwright'); // core playwright, not @playwright/test
 const fs = require('fs');
 const path = require('path');
-const { collectItems, isNonIncreasingTimestamps } = require('./shared/helper');
 
-/**
- * Tiny CLI parser for flags like:
- * --headless=false --limit=100 --verbose --report out.md --screenshot newest.png
- * @param {string[]} argv
- * @returns {Map<string,string>}
- */
+// Support either shared/helper.js (current) or shared/hn.js (older name)
+let helper;
+try {
+  helper = require('./shared/helper');
+} catch {
+  helper = require('./shared/hn');
+}
+const { collectItems, isNonIncreasingTimestamps } = helper;
+
 function parseArgs(argv) {
   const out = new Map();
   for (let i = 2; i < argv.length; i++) {
@@ -28,32 +33,38 @@ function parseArgs(argv) {
 (async () => {
   const args = parseArgs(process.argv);
 
-  // NOTE: args values are strings; compare to 'false'
   const headless = (args.get('headless') ?? 'true') !== 'false';
-  const verbose = args.has('verbose');
-  const limit = Number(args.get('limit') ?? 100);
-  const screenshotPath = args.get('screenshot');
-  const reportPath = args.get('report');
+  const verbose  = args.has('verbose');
+  const limitRaw = Number(args.get('limit') ?? 100);
+  const limit    = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 100;
+
+  const screenshotPath = args.get('screenshot'); // e.g. newest.png
+  const reportPath     = args.get('report');     // e.g. report.md
 
   const browser = await chromium.launch({ headless });
   const page = await browser.newPage();
 
   try {
+    console.log('[TEST_STATUS] Visiting /newest…');
     await page.goto('https://news.ycombinator.com/newest', { waitUntil: 'domcontentloaded' });
 
+    console.log(`[TEST_STATUS] Collecting ${limit} items…`);
     const items = await collectItems(page, { limit, verbose });
 
     if (items.length !== limit) {
       throw new Error(`Expected ${limit} items, got ${items.length}`);
     }
 
+    console.log('[TEST_STATUS] Verifying order newest → oldest…');
     const { ok, idx } = isNonIncreasingTimestamps(items);
 
     if (screenshotPath) {
+      console.log('[TEST_STATUS] Capturing screenshot…');
       await page.screenshot({ path: screenshotPath, fullPage: true });
     }
 
     if (reportPath) {
+      console.log('[TEST_STATUS] Writing report…');
       const lines = [
         `# Newest Order Check (First ${limit})`,
         '',
@@ -67,16 +78,15 @@ function parseArgs(argv) {
       fs.writeFileSync(path.resolve(reportPath), lines.join('\n'));
     }
 
-    if (ok) {
-      console.log(`PASS: First ${limit} items on /newest are sorted newest → oldest.`);
-      process.exit(0);
-    } else {
+    if (!ok) {
       const prev = items[idx - 1], curr = items[idx];
-      console.error(
+      throw new Error(
         `FAIL at #${curr.index}:\nPrev: ${prev.iso} "${prev.title}"\nCurr: ${curr.iso} "${curr.title}"`
       );
-      process.exit(1);
     }
+
+    console.log(`PASS: First ${limit} items on /newest are sorted newest → oldest.`);
+    process.exit(0);
   } catch (e) {
     console.error('ERROR:', e?.message || e);
     process.exit(1);
