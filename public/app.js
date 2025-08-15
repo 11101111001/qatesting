@@ -1,146 +1,196 @@
-const { createApp } = Vue;
+// public/app.js
+const { createApp } = window.Vue;
 
 createApp({
   data() {
     return {
       tests: [],
-      timeoutMs: 5 * 60 * 1000, // client-side timeout safety (still have server-side)
-      streams: {},              // name -> EventSource
-      timers: {}                // name -> timeout id
+      authUser: '',
+      authPass: '',
+      showPw: false,
+      savingCreds: false,
+      saveMsg: '',
+      // Track EventSource per test for aborts
+      streams: {},
     };
   },
   async mounted() {
-    const res = await fetch('/api/tests');
-    const files = await res.json();
-    this.tests = files.map(f => ({
-      name: f.replace(/\.spec\.js$/, ''),
-      status: 'idle',   // idle | running | pass | fail | timeout | aborted
-      statusText: '',
-      logs: [],
-      showLogs: false
-    }));
-    // Optional: also show Scraper as a pseudo-test
-    if (!this.tests.find(t => t.name === 'Scraper')) {
-      this.tests.unshift({ name: 'Scraper', status: 'idle', statusText: '', logs: [], showLogs: false });
+    try {
+      const res = await fetch('/api/tests');
+      const files = await res.json();
+      this.tests = files.map(f => ({
+        name: f,
+        status: 'idle',      // idle | running | pass | fail | aborted | error
+        statusText: '',
+        logs: [],
+        showLogs: false,
+        startedAt: 0,
+        timerId: null,
+      }));
+    } catch (e) {
+      console.error('Failed to load test list', e);
     }
   },
   methods: {
-    // Clean up local handles
-    _clearLocal(name) {
-      const es = this.streams[name];
-      if (es) {
-        try { es.close(); } catch {}
-        delete this.streams[name];
-      }
-      if (this.timers[name]) {
-        clearTimeout(this.timers[name]);
-        delete this.timers[name];
+    // ---------- credentials ----------
+    async saveCreds() {
+      this.savingCreds = true;
+      this.saveMsg = '';
+      try {
+        const resp = await fetch('/api/auth/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user: this.authUser, pass: this.authPass }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        this.saveMsg = 'Credentials saved (in-memory).';
+      } catch (e) {
+        this.saveMsg = 'Failed to save: ' + (e?.message || e);
+      } finally {
+        this.savingCreds = false;
+        setTimeout(() => (this.saveMsg = ''), 4000);
       }
     },
+    verifyLoginNow() {
+      // Run the node script (auth-check)
+      // Present it as a pseudo-test row at the top.
+      const name = 'auth-check';
+      let t = this.tests.find(x => x.name === name);
+      if (!t) {
+        t = { name, status: 'idle', statusText: '', logs: [], showLogs: true, startedAt: 0, timerId: null };
+        this.tests.unshift(t);
+      }
+      this.runSSE(name, t);
+    },
 
+    // ---------- test runner ----------
     runTest(name) {
       const t = this.tests.find(x => x.name === name);
       if (!t) return;
+      this.runSSE(name, t);
+    },
 
-      // If already running, abort previous client stream (server will also replace)
-      this._clearLocal(name);
+    runSSE(name, t) {
+      // Close existing if any
+      this.abortTest(name);
 
       t.status = 'running';
-      t.statusText = `Running: ${name}`;
+      t.statusText = 'starting…';
       t.logs = [];
-      t.showLogs = true;
+      t.showLogs = false; // collapsed by default
+      t.startedAt = Date.now();
 
-      const isScraper = name === 'Scraper';
-      const url = isScraper ? `/api/run-scraper` : `/api/stream-test/${name}`;
-      const es = new EventSource(url);
+      const TIMEOUT_MS = 90_000; // 90s per run
+      const escName = encodeURIComponent(name);
+      const es = new EventSource(`/api/stream-test/${escName}`);
       this.streams[name] = es;
 
-      // client-side timeout (server also enforces one)
-      this.timers[name] = setTimeout(() => {
-        t.status = 'timeout';
-        t.statusText = 'Timed out';
-        this._clearLocal(name);
-        t.logs.push(`[TIMEOUT] Client-side: exceeded ${this.timeoutMs / 1000}s`);
-      }, this.timeoutMs);
+      // timeout watchdog
+      t.timerId = setTimeout(() => {
+        this.appendLog(t, '[timeout] test exceeded time limit');
+        this.finishTest(t, 'fail', `timed out after ${Math.round(TIMEOUT_MS / 1000)}s`);
+        es.close();
+      }, TIMEOUT_MS);
 
       es.onmessage = (e) => {
-        if (e.data.startsWith('[TEST_EXIT_CODE]')) {
-          const code = parseInt(e.data.split(' ')[1], 10);
-          t.status = code === 0 ? 'pass' : 'fail';
-          t.statusText = t.status === 'pass' ? 'Passed' : 'Failed';
-          this._clearLocal(name);
-        } else if (e.data.startsWith('[TEST_ABORTED]')) {
-          t.status = 'aborted';
-          t.statusText = 'Aborted';
-          this._clearLocal(name);
-        } else if (e.data.startsWith('[TEST_TIMEOUT]')) {
-          t.status = 'timeout';
-          t.statusText = 'Timed out (server)';
-          this._clearLocal(name);
-        } else if (e.data.startsWith('[TEST_STATUS]')) {
-          // If you ever emit progress lines from tests
-          t.statusText = e.data.replace('[TEST_STATUS]', '').trim();
-        } else {
-          t.logs.push(e.data);
+        const line = e.data || '';
+        if (line.startsWith('[TEST_EXIT_CODE]')) {
+          const code = parseInt(line.split(' ')[1], 10);
+          if (code === 0) {
+            this.finishTest(t, 'pass', 'completed');
+          } else {
+            this.finishTest(t, 'fail', `exit ${code}`);
+          }
+          es.close();
+          return;
         }
+        // live status hints
+        if (/^Running \d+ tests/.test(line)) t.statusText = 'running';
+        if (/^✓/.test(line)) t.statusText = 'assertions passing';
+        if (/^✘/.test(line) || /FAIL|Error:/i.test(line)) t.statusText = 'assertion failed';
+        this.appendLog(t, line);
       };
 
       es.onerror = () => {
-        // Only mark as fail if we didn’t just finalize
+        // If still running, mark as error
         if (t.status === 'running') {
-          t.status = 'fail';
-          t.statusText = 'Connection error';
+          this.appendLog(t, '[error] SSE connection closed unexpectedly');
+          this.finishTest(t, 'error', 'connection lost');
         }
-        this._clearLocal(name);
+        es.close();
       };
     },
 
-    // Abort a single test (server kills process)
-    async abortTest(name) {
-      const t = this.tests.find(x => x.name === name);
-      if (!t) return;
+    appendLog(t, line) {
+      // Keep log list bounded
+      if (t.logs.length > 5000) t.logs.splice(0, 1000);
+      t.logs.push(line);
+    },
 
-      try {
-        await fetch(`/api/abort/${encodeURIComponent(name)}`);
-      } catch {}
-      // Optimistic local cleanup; server will also send [TEST_ABORTED] if stream still open
-      this._clearLocal(name);
-      if (t.status === 'running') {
-        t.status = 'aborted';
-        t.statusText = 'Aborted';
+    finishTest(t, status, statusText = '') {
+      t.status = status;
+      t.statusText = statusText;
+      if (t.timerId) {
+        clearTimeout(t.timerId);
+        t.timerId = null;
+      }
+      const name = t.name;
+      if (this.streams[name]) {
+        this.streams[name].close();
+        delete this.streams[name];
       }
     },
 
-    // Reset all (server aborts all, UI cleared)
-    async resetAll() {
-      try {
-        await fetch('/api/reset');
-      } catch {}
-      // Local cleanup
-      for (const name of Object.keys(this.streams)) {
-        this._clearLocal(name);
+    abortTest(name) {
+      const t = this.tests.find(x => x.name === name);
+      const stream = this.streams[name];
+      if (stream) {
+        stream.close();
+        delete this.streams[name];
       }
+      fetch(`/api/abort/${encodeURIComponent(name)}`, { method: 'POST' }).catch(() => {});
+      if (t && t.status === 'running') {
+        if (t.timerId) {
+          clearTimeout(t.timerId);
+          t.timerId = null;
+        }
+        t.status = 'aborted';
+        t.statusText = 'stopped by user';
+      }
+    },
+
+    async runAll() {
       for (const t of this.tests) {
+        await new Promise((resolve) => {
+          this.runSSE(t.name, t);
+          const poll = setInterval(() => {
+            if (['pass', 'fail', 'error', 'aborted'].includes(t.status)) {
+              clearInterval(poll);
+              resolve();
+            }
+          }, 400);
+        });
+      }
+    },
+
+    resetAll() {
+      // Abort all streams and clear statuses/logs
+      for (const [name, es] of Object.entries(this.streams)) {
+        es.close();
+        fetch(`/api/abort/${encodeURIComponent(name)}`, { method: 'POST' }).catch(() => {});
+      }
+      this.streams = {};
+      for (const t of this.tests) {
+        if (t.timerId) {
+          clearTimeout(t.timerId);
+          t.timerId = null;
+        }
         t.status = 'idle';
         t.statusText = '';
         t.logs = [];
         t.showLogs = false;
       }
+      this.saveMsg = '';
     },
-
-    // Convenience: run everything sequentially
-    async runAll() {
-      for (const t of this.tests) {
-        this.runTest(t.name);
-        await new Promise(resolve => {
-          const check = setInterval(() => {
-            if (['pass', 'fail', 'timeout', 'aborted'].includes(t.status)) {
-              clearInterval(check);
-              resolve();
-            }
-          }, 300);
-        });
-      }
-    }
-  }
+  },
 }).mount('#app');

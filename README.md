@@ -45,15 +45,16 @@ npx playwright show-report
 
 ---
 
-
+## Auth Tests (login/logout)
 
 ### macOS/Linux
 
 export HN_USER="your_username"
 export HN_PASS="your_password"
 
-``` Windows PowerShell```
-``` $env:HN_USER="your_username"; $env:HN_PASS="your_password"```
+```Windows PowerShell```
+
+```$env:HN_USER="your_username"; $env:HN_PASS="your_password"```
 
 ### Then
 

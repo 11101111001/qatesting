@@ -1,176 +1,172 @@
-// server/index.js (CommonJS)
-// Unified server: static frontend + SSE streaming + test listing + scraper
+// server/index.js
 const express = require('express');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
+const crypto = require('crypto');
+
+// ephemeral token -> { user, pass, expiresAt }
+const credsStore = new Map();
+function newToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+function setCreds(user, pass) {
+  const token = newToken();
+  credsStore.set(token, { user, pass, expiresAt: Date.now() + 15 * 60_000 }); // 15 min
+  return token;
+}
+function getCreds(token) {
+  const rec = credsStore.get(token);
+  if (!rec) return null;
+  if (Date.now() > rec.expiresAt) {
+    credsStore.delete(token);
+    return null;
+  }
+  return rec;
+}
+// GC occasionally
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of credsStore.entries()) {
+    if (now > v.expiresAt) credsStore.delete(k);
+  }
+}, 60_000);
+
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
 
 const ROOT = path.resolve(__dirname, '..');
+const TEST_DIR = path.join(ROOT, 'tests');
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const TESTS_DIR = path.join(ROOT, 'tests');
-const DEFAULT_TEST_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-// Track currently running SSE tests by name (so we can abort/reset)
-const runs = new Map(); // name -> { proc, res, keepAlive, killer }
+const state = { hnUser: null, hnPass: null };
 
-// --- Serve static frontend (serves / and assets) ---
-app.use(express.static(PUBLIC_DIR, { index: 'index.html' }));
+// Serve static frontend first
+app.use(express.static(PUBLIC_DIR));
 
-// --- Utility: start a tracked SSE run (with keep-alive + timeout + cleanup) ---
-function startTrackedRun(name, res, cmd, args, opts = {}) {
-  const {
-    cwd = ROOT,
-    timeoutMs = DEFAULT_TEST_TIMEOUT_MS,
-    env = process.env,
-  } = opts;
-
-  // If a test with this name is already running, abort & replace it
-  const existing = runs.get(name);
-  if (existing) {
-    try {
-      existing.res.write(`data: [TEST_ABORTED] Replaced by new run\n\n`);
-      try { existing.proc.kill('SIGKILL'); } catch {}
-      clearInterval(existing.keepAlive);
-      clearTimeout(existing.killer);
-      existing.res.end();
-    } catch {}
-    runs.delete(name);
-  }
-
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-  });
-
-  const send = (msg) => {
-    const str = String(msg);
-    res.write(`data: ${str.replace(/\n/g, '\ndata: ')}\n\n`);
-  };
-
-  // keep-alive ping
-  const keepAlive = setInterval(() => {
-    res.write(': keep-alive\n\n');
-  }, 15000);
-
-  // hard timeout
-  const killer = setTimeout(() => {
-    send(`[TEST_TIMEOUT] Exceeded ${Math.round(timeoutMs / 1000)}s`);
-    try { proc.kill('SIGKILL'); } catch {}
-  }, timeoutMs);
-
-  const proc = spawn(cmd, args, {
-    cwd,
-    shell: true,
-    env: { ...env, FORCE_COLOR: '1' },
-  });
-
-  runs.set(name, { proc, res, keepAlive, killer });
-
-  proc.stdout.on('data', (d) => send(d.toString()));
-  proc.stderr.on('data', (d) => send(d.toString()));
-
-  const cleanup = (code) => {
-    clearInterval(keepAlive);
-    clearTimeout(killer);
-    runs.delete(name);
-    send(`[TEST_EXIT_CODE] ${code}`);
-    res.end();
-  };
-
-  proc.on('close', (code) => cleanup(code));
-
-  // client closed early
-  res.on('close', () => {
-    if (runs.has(name)) {
-      try { proc.kill(); } catch {}
-      clearInterval(keepAlive);
-      clearTimeout(killer);
-      runs.delete(name);
-    }
-  });
-}
-
-// --- API: list tests ---
+/** List tests */
 app.get('/api/tests', (req, res) => {
-  const files = fs.existsSync(TESTS_DIR)
-    ? fs.readdirSync(TESTS_DIR).filter(f => f.endsWith('.spec.js'))
+  const files = fs.existsSync(TEST_DIR)
+    ? fs.readdirSync(TEST_DIR).filter(f => f.endsWith('.spec.js'))
     : [];
   res.json(files);
 });
 
-// --- API: run test by exact filename (still available) ---
-app.get('/api/run/:file', (req, res) => {
-  const testFile = path.join(TESTS_DIR, req.params.file);
-  if (!fs.existsSync(testFile)) {
-    res.status(404).end('data: Test not found\n\n');
-    return;
-  }
-  // use name = filename for tracking
-  const name = req.params.file.replace(/\.spec\.js$/, '');
-  startTrackedRun(name, res, 'npx', ['playwright', 'test', testFile, '--reporter', 'list']);
+/** Save credentials (card only sets these; does not run tests) */
+app.post('/api/auth/set', (req, res) => {
+  const { user, pass } = req.body || {};
+  if (!user || !pass) return res.status(400).json({ error: 'Missing user or pass' });
+  state.hnUser = String(user);
+  state.hnPass = String(pass);
+  res.json({ ok: true });
 });
 
-// --- API: run scraper CLI (root-level index.js) ---
-app.get('/api/run-scraper', (req, res) => {
-  startTrackedRun('Scraper', res, 'node', ['index.js', '--limit=20']);
+/** Clear credentials (optional) */
+app.post('/api/auth/clear', (_req, res) => {
+  state.hnUser = null;
+  state.hnPass = null;
+  res.json({ ok: true });
 });
 
-// --- API: stream by simple name (e.g., /api/stream-test/ordering-full) ---
+app.post('/api/auth/submit', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'Missing username/password' });
+  const token = setCreds(username, password);
+  res.json({ ok: true, token, expiresInSec: 15 * 60 });
+});
+
+/** Helper to stream a child process over SSE */
+function runSSE(req, res, cmd, args, env = {}) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+
+  const child = spawn(cmd, args, {
+    shell: true,
+    env: { ...process.env, ...env, FORCE_COLOR: '1' },
+    cwd: ROOT,
+  });
+
+  const send = (buf) => {
+    const lines = buf.toString().split('\n');
+    for (const line of lines) {
+      if (line.length) res.write(`data: ${line}\n\n`);
+    }
+  };
+
+  child.stdout.on('data', send);
+  child.stderr.on('data', send);
+
+  child.on('close', (code) => {
+    res.write(`data: [TEST_EXIT_CODE] ${code}\n\n`);
+    res.end();
+  });
+
+  req.on('close', () => child.kill());
+}
+
+/** Map names to files */
+const testMap = {
+  'ordering-full.spec.js': path.join(TEST_DIR, 'ordering-full.spec.js'),
+  'links.spec.js': path.join(TEST_DIR, 'links.spec.js'),
+  'tabs.spec.js': path.join(TEST_DIR, 'tabs.spec.js'),
+  'auth.spec.js': path.join(TEST_DIR, 'auth.spec.js'),
+  'auth-check': path.join(ROOT, 'auth-check.js'), // node script
+};
+
+/** Run test or node script via SSE */
 app.get('/api/stream-test/:name', (req, res) => {
-  const name = req.params.name;
-  const base = name.endsWith('.spec.js') ? name : `${name}.spec.js`;
-  const testFile = path.join(TESTS_DIR, base);
-  if (!fs.existsSync(testFile)) {
+  const { name } = req.params;
+  const token = req.query.token;
+
+  // Special-case first: auth-check always runs with Node
+  if (name === 'auth-check') {
+    const file = testMap['auth-check'];
+    if (!fs.existsSync(file)) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write('data: auth-check.js not found\n\n');
+      res.write('data: [TEST_EXIT_CODE] 1\n\n');
+      return res.end();
+    }
+    return runSSE(
+      req,
+      res,
+      'node',
+      [path.relative(ROOT, file)],
+      { HN_USER: state.hnUser || '', HN_PASS: state.hnPass || '' }
+    );
+  }
+
+  // Otherwise treat :name as a Playwright test file
+  const file = testMap[name] || path.join(TEST_DIR, name);
+  if (!fs.existsSync(file)) {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write(`data: Unknown test: ${name}\n\n`);
+    res.write('data: [TEST_EXIT_CODE] 1\n\n');
     return res.end();
   }
-  startTrackedRun(name, res, 'npx', ['playwright', 'test', testFile, '--reporter', 'list']);
+
+  runSSE(
+    req,
+    res,
+    'npx',
+    ['playwright', 'test', path.relative(ROOT, file), '--reporter', 'list'],
+    { HN_USER: state.hnUser || '', HN_PASS: state.hnPass || '' }
+  );
 });
 
-// --- API: abort a running test by name ---
-app.get('/api/abort/:name', (req, res) => {
-  const name = req.params.name;
-  const run = runs.get(name);
-  if (!run) {
-    return res.status(404).json({ ok: false, message: 'No running test' });
-  }
-  try {
-    run.res.write(`data: [TEST_ABORTED] Aborted by user\n\n`);
-    try { run.proc.kill('SIGKILL'); } catch {}
-    clearInterval(run.keepAlive);
-    clearTimeout(run.killer);
-    run.res.end();
-  } catch {}
-  runs.delete(name);
-  res.json({ ok: true });
-});
+/** Abort endpoint (client closes SSE; we ack) */
+app.post('/api/abort/:name', (_req, res) => res.json({ ok: true }));
 
-// --- API: reset (abort everything) ---
-app.get('/api/reset', (req, res) => {
-  for (const [name, run] of runs.entries()) {
-    try {
-      run.res.write(`data: [TEST_ABORTED] Reset requested\n\n`);
-      try { run.proc.kill('SIGKILL'); } catch {}
-      clearInterval(run.keepAlive);
-      clearTimeout(run.killer);
-      run.res.end();
-    } catch {}
-  }
-  runs.clear();
-  res.json({ ok: true });
-});
-
-// --- SPA fallback: for non-API GET/HEAD, return index.html ---
-app.use((req, res, next) => {
-  if (req.path.startsWith('/api/')) return next();
-  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+/** SPA fallback (Express v5-friendly regex; avoids path-to-regexp crash) */
+app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+  console.log(`Test runner server at http://localhost:${PORT}`);
 });

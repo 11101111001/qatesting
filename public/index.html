@@ -7,61 +7,88 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <link rel="icon" href="/favicon.ico" />
 </head>
-<body class="bg-gradient-to-tl from-[#c2410c] via-[#f97316] to-[#fdba74]">
-  <div id="app" class="max-w-4xl mx-auto p-6">
-    <h1 class="text-2xl font-bold mb-4">Hacker News Test Runner</h1>
+<body class="bg-[radial-gradient(1200px_600px_at_100%_-100px,rgba(255,255,255,0.35)_0,rgba(255,255,255,0)_100%),linear-gradient(to_bottom_right,#0ea5e9,#1e3a8a)] min-h-screen">
+  <div id="app" class="max-w-4xl mx-auto p-6 text-slate-900">
+    <h1 class="text-2xl font-bold mb-4 text-white drop-shadow">Hacker News Test Runner</h1>
 
-    <div class="mb-4 space-x-2">
+    <!-- Credentials Card -->
+    <div class="mb-6 rounded-2xl shadow p-4 border bg-white/90 backdrop-blur">
+      <h2 class="text-lg font-medium mb-3">Login credentials</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+        <label class="block sm:col-span-1">
+          <span class="text-sm">Username</span>
+          <input v-model="authUser" class="mt-1 w-full border rounded px-3 py-2" placeholder="hn username" />
+        </label>
+        <label class="block sm:col-span-1">
+          <span class="text-sm">Password</span>
+          <input v-model="authPass" :type="showPw ? 'text' : 'password'" class="mt-1 w-full border rounded px-3 py-2" placeholder="••••••••" />
+        </label>
+        <div class="flex gap-2 sm:col-span-2">
+          <button @click="showPw = !showPw" class="border rounded px-3 py-2">
+            {{ showPw ? 'Hide' : 'Show' }} PW
+          </button>
+          <button @click="saveCreds" :disabled="savingCreds" class="bg-gray-800 text-white rounded px-3 py-2 disabled:opacity-60">
+            {{ savingCreds ? 'Saving…' : 'Save' }}
+          </button>
+          <button @click="verifyLoginNow" class="bg-emerald-600 text-white rounded px-3 py-2">
+            Verify login
+          </button>
+        </div>
+      </div>
+      <p class="text-xs text-gray-500 mt-2">Credentials are saved in-memory on the server and injected as <code>HN_USER</code>/<code>HN_PASS</code> when tests run.</p>
+      <p v-if="saveMsg" class="text-sm mt-2" :class="saveMsg.startsWith('Failed') ? 'text-red-600' : 'text-emerald-700'">
+        {{ saveMsg }}
+      </p>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="mb-4 flex flex-wrap gap-2">
       <button @click="runAll"
         class="px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600">
         Run All Tests
       </button>
-      <button @click="resetAll" class="px-3 py-2 bg-gray-600 text-white rounded">Reset</button>
+      <button @click="resetAll" class="px-3 py-2 bg-gray-700 text-white rounded hover:bg-gray-800">Reset</button>
     </div>
 
-    <div v-for="t in tests" :key="t.name" class="border p-3 rounded mb-2 bg-white">
-        <div class="flex items-center justify-between">
+    <!-- Test Cards -->
+    <div v-for="t in tests" :key="t.name" class="border p-3 rounded mb-2 bg-white/95 backdrop-blur">
+      <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
-        <div v-if="t.status==='running'" class="animate-spin h-4 w-4 border-2 border-t-transparent rounded-full"></div>
-            <span class="font-medium">{{ t.name }}</span>
-            <span class="text-sm text-gray-500" v-if="t.statusText">— {{ t.statusText }}</span>
+          <div v-if="t.status==='running'" class="animate-spin h-4 w-4 border-2 border-t-transparent rounded-full"></div>
+          <span class="font-medium">{{ t.name }}</span>
+          <span v-if="t.status==='pass'" class="text-emerald-700 text-sm">— passed</span>
+          <span v-else-if="t.status==='fail'" class="text-red-600 text-sm">— failed</span>
+          <span v-else-if="t.status==='error'" class="text-red-600 text-sm">— error</span>
+          <span v-else-if="t.status==='aborted'" class="text-gray-500 text-sm">— aborted</span>
+          <span v-else-if="t.statusText" class="text-sm text-gray-600">— {{ t.statusText }}</span>
         </div>
 
         <div class="flex items-center gap-2">
-
-            <!-- Toggle Run / Abort -->
-            <button
+          <!-- Run / Abort toggle -->
+          <button
             v-if="t.status !== 'running'"
             @click="runTest(t.name)"
-            class="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
-            >
-            Run
-            </button>
+            class="px-3 py-1.5 rounded bg-orange-500 text-white hover:bg-blue-700"
+          >Run</button>
+          <button
+            v-else
+            @click="abortTest(t.name)"
+            class="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
+          >Abort</button>
 
-            <button
-                v-else
-                @click="abortTest(t.name)"
-                class="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700"
-            >
-                Abort
-            </button>
-
-            <!-- Show/Hide Logs -->
-            <button
-                @click="t.showLogs = !t.showLogs"
-                class="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300"
-            >
-                {{ t.showLogs ? 'Hide' : 'Show' }} Logs
-            </button>
+          <!-- Logs toggle -->
+          <button
+            @click="t.showLogs = !t.showLogs"
+            class="px-3 py-1.5 rounded bg-gray-200 hover:bg-gray-300"
+          >{{ t.showLogs ? 'Hide' : 'Show' }} Logs</button>
         </div>
-        </div>
+      </div>
 
-        <pre v-if="t.showLogs"
-            class="mt-2 bg-black text-green-400 p-3 rounded h-60 overflow-auto whitespace-pre-wrap">
-        {{ t.logs.join('\n') }}</pre>
+      <pre v-if="t.showLogs"
+           class="mt-2 bg-black text-green-400 p-3 rounded h-60 overflow-auto whitespace-pre-wrap">{{ t.logs.join('\n') }}</pre>
     </div>
   </div>
 
-  <script src="/app.js"></script>
+  <script defer src="/app.js"></script>
 </body>
 </html>
