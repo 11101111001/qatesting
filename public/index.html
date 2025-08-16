@@ -2,14 +2,14 @@
 <html>
 <head>
   <meta charset="UTF-8" />
-  <title>HN Test Runner</title>
+  <title>HN Test App</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-  <link rel="icon" href="/favicon.ico" />
+  <link rel="shortcut icon" id="dynamic-favicon" href="https://res.cloudinary.com/huht2rslk/image/upload/v1754949064/wolf_favicon_cdvvtz.png">
 </head>
-<body class="bg-[radial-gradient(1200px_600px_at_100%_-100px,rgba(255,255,255,0.35)_0,rgba(255,255,255,0)_100%),linear-gradient(to_bottom_right,#0ea5e9,#1e3a8a)] min-h-screen">
+<body class="bg-gradient-to-br from-yellow-600 via-purple-800 to-slate-900 min-h-screen">
   <div id="app" class="max-w-4xl mx-auto p-6 text-slate-900">
-    <h1 class="text-2xl font-bold mb-4 text-white drop-shadow">Hacker News Test Runner</h1>
+    <h1 class="text-2xl font-bold mb-4 text-white drop-shadow">Hacker News Test Application</h1>
 
     <!-- Credentials Card -->
     <div class="mb-6 rounded-2xl shadow p-4 border bg-white/90 backdrop-blur">
@@ -85,7 +85,7 @@
       </div>
 
       <pre v-if="t.showLogs"
-           class="mt-2 bg-black text-green-400 p-3 rounded h-60 overflow-auto whitespace-pre-wrap">{{ t.logs.join('\n') }}</pre>
+           class="mt-2 bg-black text-slate-50 p-3 rounded h-60 overflow-auto whitespace-pre-wrap">{{ t.logs.join('\n') }}</pre>
     </div>
   </div>
 
