@@ -3,14 +3,20 @@ const express = require('express');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-
 const crypto = require('crypto');
 
-// ephemeral token -> { user, pass, expiresAt }
-const credsStore = new Map();
-function newToken() {
-  return crypto.randomBytes(16).toString('hex');
-}
+const app = express();
+app.use(express.json());
+
+const ROOT = path.resolve(__dirname, '..');
+const TEST_DIR = path.join(ROOT, 'tests');
+const PUBLIC_DIR = path.join(ROOT, 'public');
+
+// ---------- Credentials (saved or ephemeral token) ----------
+const state = { hnUser: null, hnPass: null };
+
+const credsStore = new Map(); // token -> { user, pass, expiresAt }
+const newToken = () => crypto.randomBytes(16).toString('hex');
 function setCreds(user, pass) {
   const token = newToken();
   credsStore.set(token, { user, pass, expiresAt: Date.now() + 15 * 60_000 }); // 15 min
@@ -25,7 +31,7 @@ function getCreds(token) {
   }
   return rec;
 }
-// GC occasionally
+// GC expired tokens occasionally
 setInterval(() => {
   const now = Date.now();
   for (const [k, v] of credsStore.entries()) {
@@ -33,19 +39,10 @@ setInterval(() => {
   }
 }, 60_000);
 
-const app = express();
-app.use(express.json());
-
-const ROOT = path.resolve(__dirname, '..');
-const TEST_DIR = path.join(ROOT, 'tests');
-const PUBLIC_DIR = path.join(ROOT, 'public');
-
-const state = { hnUser: null, hnPass: null };
-
-// Serve static frontend first
+// ---------- Static UI ----------
 app.use(express.static(PUBLIC_DIR));
 
-/** List tests */
+// ---------- Test listing ----------
 app.get('/api/tests', (req, res) => {
   const files = fs.existsSync(TEST_DIR)
     ? fs.readdirSync(TEST_DIR).filter(f => f.endsWith('.spec.js'))
@@ -53,7 +50,7 @@ app.get('/api/tests', (req, res) => {
   res.json(files);
 });
 
-/** Save credentials (card only sets these; does not run tests) */
+// ---------- Auth card: save / clear / token ----------
 app.post('/api/auth/set', (req, res) => {
   const { user, pass } = req.body || {};
   if (!user || !pass) return res.status(400).json({ error: 'Missing user or pass' });
@@ -62,7 +59,6 @@ app.post('/api/auth/set', (req, res) => {
   res.json({ ok: true });
 });
 
-/** Clear credentials (optional) */
 app.post('/api/auth/clear', (_req, res) => {
   state.hnUser = null;
   state.hnPass = null;
@@ -76,8 +72,14 @@ app.post('/api/auth/submit', (req, res) => {
   res.json({ ok: true, token, expiresInSec: 15 * 60 });
 });
 
-/** Helper to stream a child process over SSE */
-function runSSE(req, res, cmd, args, env = {}) {
+// ---------- Helper: spawn + pipe to SSE ----------
+const npxBin = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const reporterPathFs = path.join(__dirname, 'mini-reporter.js');
+const reporterArg = fs.existsSync(reporterPathFs)
+  ? reporterPathFs.replace(/\\/g, '/') // Playwright accepts POSIX path separators
+  : 'list';
+
+function runSSE(req, res, cmd, args, extraEnv = {}) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -85,9 +87,13 @@ function runSSE(req, res, cmd, args, env = {}) {
   });
 
   const child = spawn(cmd, args, {
-    shell: true,
-    env: { ...process.env, ...env, FORCE_COLOR: '1' },
+    shell: false,        // better cross-platform behavior with explicit binaries
     cwd: ROOT,
+    env: {
+      ...process.env,
+      ...extraEnv,
+      FORCE_COLOR: '0',  // cleaner logs for SSE
+    },
   });
 
   const send = (buf) => {
@@ -108,7 +114,7 @@ function runSSE(req, res, cmd, args, env = {}) {
   req.on('close', () => child.kill());
 }
 
-/** Map names to files */
+// ---------- Known tests / scripts ----------
 const testMap = {
   'ordering-full.spec.js': path.join(TEST_DIR, 'ordering-full.spec.js'),
   'links.spec.js': path.join(TEST_DIR, 'links.spec.js'),
@@ -117,12 +123,17 @@ const testMap = {
   'auth-check': path.join(ROOT, 'auth-check.js'), // node script
 };
 
-/** Run test or node script via SSE */
+// ---------- Stream a test (Playwright) or script (node) ----------
 app.get('/api/stream-test/:name', (req, res) => {
   const { name } = req.params;
-  const token = req.query.token;
+  const { token, headed } = req.query;
 
-  // Special-case first: auth-check always runs with Node
+  // Resolve creds: token (one-off) overrides saved state
+  const tokenCreds = token ? getCreds(String(token)) : null;
+  const HN_USER = tokenCreds?.user ?? state.hnUser ?? '';
+  const HN_PASS = tokenCreds?.pass ?? state.hnPass ?? '';
+
+  // Special-case: auth-check is a plain node script
   if (name === 'auth-check') {
     const file = testMap['auth-check'];
     if (!fs.existsSync(file)) {
@@ -131,16 +142,10 @@ app.get('/api/stream-test/:name', (req, res) => {
       res.write('data: [TEST_EXIT_CODE] 1\n\n');
       return res.end();
     }
-    return runSSE(
-      req,
-      res,
-      'node',
-      [path.relative(ROOT, file)],
-      { HN_USER: state.hnUser || '', HN_PASS: state.hnPass || '' }
-    );
+    return runSSE(req, res, process.execPath, [path.relative(ROOT, file)], { HN_USER, HN_PASS });
   }
 
-  // Otherwise treat :name as a Playwright test file
+  // Playwright test file
   const file = testMap[name] || path.join(TEST_DIR, name);
   if (!fs.existsSync(file)) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
@@ -149,23 +154,29 @@ app.get('/api/stream-test/:name', (req, res) => {
     return res.end();
   }
 
-  runSSE(
-    req,
-    res,
-    'npx',
-    ['playwright', 'test', path.relative(ROOT, file), '--reporter', 'list'],
-    { HN_USER: state.hnUser || '', HN_PASS: state.hnPass || '' }
-  );
+  const cliArgs = [
+    'playwright', 'test',
+    path.relative(ROOT, file),
+    '--reporter', reporterArg,
+  ];
+
+  // Optional headed mode: /api/stream-test/foo?headed=1
+  if (headed === '1' || headed === 'true') {
+    cliArgs.push('--headed');
+  }
+
+  runSSE(req, res, npxBin, cliArgs, { HN_USER, HN_PASS });
 });
 
-/** Abort endpoint (client closes SSE; we ack) */
+// ---------- Abort: client just closes SSE; we ack ----------
 app.post('/api/abort/:name', (_req, res) => res.json({ ok: true }));
 
-/** SPA fallback (Express v5-friendly regex; avoids path-to-regexp crash) */
+// ---------- SPA fallback (safe for Express v5 path-to-regexp) ----------
 app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 
+// ---------- Listen ----------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Test runner server at http://localhost:${PORT}`);

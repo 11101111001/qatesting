@@ -1,6 +1,27 @@
 // @ts-check
 import { test, expect } from '@playwright/test';
 
+/* -----------------------------------------------------------------------------
+ File: tests/submit.spec.js  (optional / bonus)
+
+ What this runs
+ - Navigates to /submit. If logged out, asserts the login requirement UI.
+ - If logged in (HN_USER/HN_PASS) and no bot challenge, asserts that the
+   submit form fields (title/url/text) render and basic validation works.
+ - Does NOT actually post content to HN.
+
+ Key assertions
+ - Logged out: “login” link visible and submit UI gated.
+ - Logged in: form inputs visible, submit button present, basic required-field
+   validation messages appear when appropriate.
+
+ How to run (single file)
+   npx playwright test tests/submit.spec.js
+
+ Notes
+ - Guarded to avoid writing to production. Treat as a UI validation test only.
+ ----------------------------------------------------------------------------- */
+
 const HN_USER = process.env.HN_USER || '';
 const HN_PASS = process.env.HN_PASS || '';
 

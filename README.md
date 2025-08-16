@@ -34,6 +34,12 @@ Open **http://localhost:3000** and click **Run** on any test. You can **Abort** 
 
 ## Test Catalog (what each file checks)
 
+### `takehomeassign.spec.js` (Original test asked for in the take home)
+
+- Uses **locator-only** scraping across pagination to collect the first **100** newest items.
+- Normalizes timestamps (prefers ISO in `title` attr; falls back to parsing relative age).
+- Asserts timestamps are **non-increasing** (newest → oldest), allowing ties.
+
 ### `smoke.spec.js`
 
 - `/newest` loads and URL matches.
@@ -65,12 +71,6 @@ Open **http://localhost:3000** and click **Run** on any test. You can **Abort** 
 - Tries `HEAD`, falls back to `GET`.
 - Treats major bot blocks (e.g., 403) as **skips**; otherwise expects **< 400** status.
   > Some publishers gate with 400/403/anti-bot; the test logs these and continues.
-
-### `ordering-full.spec.js`
-
-- Uses **locator-only** scraping across pagination to collect the first **100** newest items.
-- Normalizes timestamps (prefers ISO in `title` attr; falls back to parsing relative age).
-- Asserts timestamps are **non-increasing** (newest → oldest), allowing ties.
 
 ### `performance.spec.js`
 

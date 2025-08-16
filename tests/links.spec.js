@@ -1,73 +1,82 @@
-// @ts-check
+// tests/links.spec.js
 import { test, expect } from '@playwright/test';
 
-const SOFT_SKIP_STATUSES = new Set([400, 401, 403, 404, 405, 409, 410, 412, 418, 429]);
-const SOFT_SKIP_HOSTS = [
-  /(^|\.)ai\.meta\.com$/i,
-  /(^|\.)science\.org$/i,
-  /(^|\.)twitter\.com$/i,
-  /(^|\.)x\.com$/i,
-];
+/* -----------------------------------------------------------------------------
+ File: tests/links.spec.js
 
-function hostOf(u) {
-  try { return new URL(u).host; } catch { return ''; }
-}
+ What this runs
+ - Loads /newest, samples the first N story links, and probes each URL via
+   HEAD (fallback to GET). Collects any failures and asserts zero failures.
 
-test('story links respond (HEAD/GET sample)', async ({ page, request }) => {
-  await page.goto('/newest');
+ Key assertions
+ - At least one story row exists.
+ - For each sampled link:
+   • A response is received (HEAD or GET).
+   • 2xx/3xx statuses pass; 4xx/5xx fail (with a few explicit exceptions).
+ - If any failures occur, the test logs the failing URLs and statuses and fails.
 
-  const links = await page.locator('.titleline a').evaluateAll(a =>
-    a.map(x => x.getAttribute('href') || '').filter(Boolean)
-  );
+ How to run (single file)
+   npx playwright test tests/links.spec.js
 
-  const sample = links.slice(0, 25);
-  let hardFails = 0;
+ Notes
+ - Some publishers rate-limit/geo-block; the test tolerates a small, explicit
+   set (e.g., 403s if you coded them to “skip”), but otherwise surfaces errors.
+ ----------------------------------------------------------------------------- */
 
-  for (const url of sample) {
-    const host = hostOf(url);
+test.use({ ignoreHTTPSErrors: true });
 
-    /** @type {import('@playwright/test').APIResponse | null} */
-    let resp = null;
+test.describe('Core: link and page health', () => {
+  test('title links respond (HEAD/GET sample with aggregation)', async ({ page, request }) => {
+    await page.goto('https://news.ycombinator.com/newest', { waitUntil: 'domcontentloaded' });
 
-    try {
-      const headers = {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36 HNChecks/1.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      };
-      const head = await request.head(url, { headers });
-      resp = head.ok() ? head : await request.get(url, { headers });
-    } catch {
-      resp = null;
+    const links = await page.locator('.titleline a').evaluateAll(a =>
+      a.map(x => x.getAttribute('href') || '').filter(Boolean)
+    );
+
+    const sample = links.slice(0, 25);
+    /** @type {{url:string, status:number, note?:string}[]} */
+    const failures = [];
+
+    const allowStatus = (url, status) => {
+      // Common bot statuses; allow so test stays stable
+      if ([401, 403, 429, 503].includes(status)) return true;
+      if (status === 400 && /ai\.meta\.com/.test(url)) return true;
+      return false;
+    };
+
+    for (const url of sample) {
+      let resp = null;
+      try {
+        const head = await request.head(url, { timeout: 15_000 });
+        resp = head.ok() ? head : await request.get(url, { timeout: 15_000 });
+      } catch {
+        failures.push({ url, status: -1, note: 'network error' });
+        continue;
+      }
+      const s = resp.status();
+      if (!allowStatus(url, s) && s >= 400) failures.push({ url, status: s });
     }
 
-    if (!resp) {
-      // network-level failure — count as hard fail
-      hardFails++;
-      // eslint-disable-next-line no-console
-      console.warn(`No response from ${url}`);
-      continue;
+    if (failures.length) {
+      const detail = failures.map(f => `- ${f.url} (status: ${f.status}${f.note ? ', ' + f.note : ''})`).join('\n');
+      throw new Error(`Link failures (${failures.length}):\n${detail}`);
+    }
+    expect(true).toBe(true);
+  });
+
+  test('each titleline has an anchor; host badge present for many externals', async ({ page }) => {
+    await page.goto('https://news.ycombinator.com/newest', { waitUntil: 'domcontentloaded' });
+
+    const titles = page.locator('.titleline');
+    const count = await titles.count();
+    expect(count).toBeGreaterThan(0);
+
+    for (let i = 0; i < Math.min(25, count); i++) {
+      const tl = titles.nth(i);
+      await expect(tl.locator('a').first(), `Row ${i + 1}: anchor present`).toBeVisible();
     }
 
-    const status = resp.status();
-    const shouldSoftSkip =
-      SOFT_SKIP_STATUSES.has(status) ||
-      SOFT_SKIP_HOSTS.some((re) => re.test(host));
-
-    if (shouldSoftSkip) {
-      // eslint-disable-next-line no-console
-      console.warn(`Skipping ${status} from ${url}`);
-      continue;
-    }
-
-    // Hard fail only on 5xx or other unexpected statuses >= 400
-    if (status >= 500 || status >= 400) {
-      hardFails++;
-      // eslint-disable-next-line no-console
-      console.warn(`Hard fail ${status} from ${url}`);
-    }
-  }
-
-  // Allow a couple of hard failures, but not many.
-  expect(hardFails, `Too many hard failures among sampled links`).toBeLessThan(3);
+    const hostBadges = await page.locator('.sitebit .sitestr').count();
+    expect(hostBadges, 'There should be several host badges on Newest').toBeGreaterThanOrEqual(5);
+  });
 });

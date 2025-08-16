@@ -1,6 +1,21 @@
 // auth-check.js
 const { chromium } = require('playwright');
 
+/* -----------------------------------------------------------------------------
+ File: auth-check.js  (node script, not a Playwright test)
+
+ What this does
+ - Minimal headless login probe using playwright core.
+ - Takes HN_USER / HN_PASS from environment and attempts login.
+ - Prints a single-line result: PASS/FAIL plus a short reason.
+
+ How to run
+   HN_USER=alice HN_PASS='secret' node auth-check.js
+
+ Notes
+ - Intended for quick credential sanity checks; not part of the default suite.
+ ----------------------------------------------------------------------------- */
+
 async function main() {
   const user = process.env.HN_USER || process.argv.find(a => a.startsWith('--user='))?.split('=')[1];
   const pass = process.env.HN_PASS || process.argv.find(a => a.startsWith('--pass='))?.split('=')[1];
