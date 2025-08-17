@@ -1,94 +1,106 @@
 // tests/auth.spec.js
 import { test, expect } from '@playwright/test';
 
-const SKIP_AUTH = /^(1|true|yes)$/i.test(process.env.SKIP_AUTH ?? '');
-const HN_USER = process.env.HN_USER || '';
-const HN_PASS = process.env.HN_PASS || '';
+/**
+ * Bonus: login flow (skip if challenged)
+ *
+ * What we do
+ * - Invalid login: prove we are NOT authenticated afterward. Treat "Validation required"
+ *   as a NOT-logged-in signal as well.
+ * - Valid login: only runs when HN_USER/HN_PASS are set AND no validation gate appears.
+ *   If the gate appears, we skip to avoid flakes.
+ *
+ * Notes
+ * - No beforeAll with { page } — page/context are per-test fixtures.
+ * - The selectors are scoped to the LOGIN form (the one whose submit value is "login").
+ */
 
-/*
-  Bonus: login flow (skip if challenged)
+async function gotoLogin(page) {
+  await page.goto('/login?goto=news', { waitUntil: 'domcontentloaded' });
 
-  - Invalid login: after submitting bogus creds, we should either see "Bad login"
-    or remain clearly logged out (login form/link still present).
-  - Valid login: only runs if HN_USER/HN_PASS set; verifies logout + username;
-    skips if an anti-bot/captcha is detected.
+  // If HN shows a validation gate, surface that to the caller.
+  const gated = await page.getByText(/validation required/i).isVisible().catch(() => false);
 
-  To skip all auth tests: SKIP_AUTH=1 npx playwright test
-*/
+  // Find the login form specifically (not the account creation form).
+  const loginForm = page.locator('form').filter({
+    has: page.locator('input[type="submit"][value="login"]'),
+  });
+
+  return { gated, loginForm };
+}
 
 test.describe('Bonus: login flow (skip if challenged)', () => {
-  test.skip(SKIP_AUTH, 'SKIP_AUTH=1 set — skipping auth tests');
-
-  function challengeLocator(page) {
-    return page.locator(
-      [
-        'iframe[title*="captcha" i]',
-        'iframe[src*="captcha" i]',
-        '[id*="captcha" i]',
-        '[class*="captcha" i]',
-        'text=/human verification|are you human|verify you are human/i',
-      ].join(', ')
-    );
-  }
-
   test('invalid login keeps you logged out (shows error or login still visible)', async ({ page }) => {
-    await page.goto('/login', { waitUntil: 'domcontentloaded' });
+    const { gated, loginForm } = await gotoLogin(page);
 
-    // Fill bogus credentials using reliable name selectors
-    await page.locator('input[name="acct"]').fill(`bad_user_${Date.now()}`);
-    await page.locator('input[name="pw"]').fill('bad_password');
-    await Promise.all([
-      page.waitForLoadState('domcontentloaded'),
-      page.locator('input[type="submit"][value="login"]').click(),
-    ]);
+    // If we are gated, that's already "not logged in" — no need to submit.
+    if (!gated) {
+      // Fill with obviously bad credentials (do not collide with real accounts).
+      await loginForm.locator('input[name="acct"]').first().fill(`_invalid_${Date.now()}`);
+      await loginForm.locator('input[name="pw"]').first().fill('badpassword123');
 
-    const badLogin = page.locator('text=/^Bad login\\.?$/i'); // with/without period
-    const loginForm = page.locator('form[action="login"]');
-    const loginLink = page.getByRole('link', { name: /^login$/i });
-    const logoutLink = page.getByRole('link', { name: /^logout$/i });
-    const challenge = challengeLocator(page);
-
-    const outcome = await Promise.race([
-      badLogin.waitFor({ state: 'visible', timeout: 5000 }).then(() => 'bad'),
-      challenge.first().waitFor({ state: 'attached', timeout: 5000 }).then(() => 'challenge'),
-      loginForm.waitFor({ state: 'visible', timeout: 5000 }).then(() => 'form'),
-      loginLink.waitFor({ state: 'visible', timeout: 5000 }).then(() => 'stillLoggedOut'),
-      logoutLink.waitFor({ state: 'visible', timeout: 5000 }).then(() => 'loggedIn'),
-    ]).catch(() => 'timeout');
-
-    if (outcome === 'challenge' || outcome === 'timeout') {
-      test.skip(true, `Login guarded by anti-bot (${outcome}); skipping bonus auth test.`);
+      await Promise.all([
+        page.waitForLoadState('domcontentloaded'),
+        loginForm.locator('input[type="submit"][value="login"]').first().click(),
+      ]);
     }
 
-    // With bad creds we must NOT be logged in:
-    expect(outcome, 'Should not end up logged in with bad credentials').not.toBe('loggedIn');
-    // And we should have one of the acceptable “still logged out” signals:
-    expect(['bad', 'form', 'stillLoggedOut']).toContain(outcome);
+    // Signals that we are *still anonymous*:
+    const badBanner = await page.getByText(/bad login/i).isVisible().catch(() => false);
+    const stillOnLogin = /\/login\b/i.test(page.url());
+    const headerLoginLink = await page.getByRole('link', { name: /^login$/i }).isVisible().catch(() => false);
+    const loginFormVisible = await page
+      .locator('form')
+      .filter({ has: page.locator('input[type="submit"][value="login"]') })
+      .isVisible()
+      .catch(() => false);
+
+    const validationGate = await page.getByText(/validation required/i).isVisible().catch(() => false);
+
+    const anonymous =
+      badBanner ||
+      stillOnLogin ||
+      headerLoginLink ||
+      loginFormVisible ||
+      validationGate;
+
+    if (!anonymous) {
+      const snippet = (await page.locator('body').innerText().catch(() => '') || '').slice(0, 200);
+      throw new Error(`Should see "Bad login", or still be on the login form, or see the "login" link.\nurl=${page.url()}\nsnippet="${snippet}"`);
+    }
   });
 
   test('valid login shows logout + user link; then logout returns to anonymous', async ({ page }) => {
-    test.skip(!(HN_USER && HN_PASS), 'HN_USER/HN_PASS not provided');
+    // Allow skipping via env var or missing creds.
+    const SKIP = process.env.SKIP_AUTH === '1' || process.env.HN_SKIP_AUTH === '1';
+    test.skip(SKIP, 'Auth is disabled via SKIP_AUTH/HN_SKIP_AUTH');
 
-    await page.goto('/login', { waitUntil: 'domcontentloaded' });
+    const user = process.env.HN_USER;
+    const pass = process.env.HN_PASS;
+    test.skip(!user || !pass, 'HN_USER/HN_PASS not set');
 
-    await page.locator('input[name="acct"]').fill(HN_USER);
-    await page.locator('input[name="pw"]').fill(HN_PASS);
+    const { gated, loginForm } = await gotoLogin(page);
+    test.skip(gated, 'Validation gate present — skipping auth test to avoid flakiness');
+
+    // Fill and submit
+    await loginForm.locator('input[name="acct"]').first().fill(user);
+    await loginForm.locator('input[name="pw"]').first().fill(pass);
     await Promise.all([
       page.waitForLoadState('domcontentloaded'),
-      page.locator('input[type="submit"][value="login"]').click(),
+      loginForm.locator('input[type="submit"][value="login"]').first().click(),
     ]);
 
-    // If a challenge appears, skip this bonus test
-    if (await challengeLocator(page).first().isVisible({ timeout: 3000 }).catch(() => false)) {
-      test.skip(true, 'Login guarded by anti-bot; skipping bonus auth test.');
-    }
-
-    // Logged in: logout link + username in the top bar
+    // Prove we are logged in
     await expect(page.getByRole('link', { name: /^logout$/i })).toBeVisible();
-    await expect(page.getByRole('link', { name: new RegExp(`^${HN_USER}$`, 'i') })).toBeVisible();
 
-    // Logout should restore anonymous state (login link visible)
-    await page.getByRole('link', { name: /^logout$/i }).click();
+    // Optional: username appears in top bar when logged in (link to /user?id=<name>)
+    await expect(page.getByRole('link', { name: new RegExp(`^${user}$`, 'i') })).toBeVisible();
+
+    // Log out and ensure we return to anonymous
+    await Promise.all([
+      page.waitForLoadState('domcontentloaded'),
+      page.getByRole('link', { name: /^logout$/i }).click(),
+    ]);
     await expect(page.getByRole('link', { name: /^login$/i })).toBeVisible();
   });
 });

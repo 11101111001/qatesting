@@ -48,7 +48,7 @@ test('submit form is visible when authenticated', async ({ page }) => {
   // Now go to /submit
   await page.goto('/submit', { waitUntil: 'domcontentloaded' });
 
-  // Form fields: title/url/text exist (don’t actually submit!)
+  // Form fields: title/url/text exist (don’t actually submit)
   await expect(page.locator('input[name="title"]')).toBeVisible();
   // url or text can be used (self-posts), assert at least one is present
   await expect(page.locator('input[name="url"], textarea[name="text"]')).toBeVisible();

@@ -1,6 +1,8 @@
 // @ts-check
 import { defineConfig, devices } from '@playwright/test';
 
+const RUN_AUTH = process.env.RUN_AUTH === '1';
+
 const isHeaded = /^(1|true|yes)$/i.test(process.env.HEADED ?? '');
 const workersEnv = process.env.WORKERS ? Number(process.env.WORKERS) : undefined;
 const projectsEnv = (process.env.PROJECTS ?? '')
@@ -34,6 +36,7 @@ export default defineConfig({
     video: 'off',
     trace: 'retain-on-failure',
   },
+  grepInvert: RUN_AUTH ? undefined : /@auth/,
 
   projects: pickProjects,
 });

@@ -89,6 +89,7 @@ Open **http://localhost:3000** and click **Run** on any test. You can **Abort** 
 
 ### `auth.spec.js`
 
+- skipped by default, HN throws reCAPTCHA. Against TOS to attempt to bypass...
 - **Invalid login**: stays unauthenticated; shows the **login** link.
 - **Valid login**: logs in, then logs out (best-effort).
 - If a CAPTCHA/human-check is detected **or** credentials are missing, tests **skip** (environmental).

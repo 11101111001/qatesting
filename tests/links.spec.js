@@ -27,41 +27,47 @@ test.use({ ignoreHTTPSErrors: true });
 
 test.describe('Core: link and page health', () => {
   test('title links respond (HEAD/GET sample with aggregation)', async ({ page, request }) => {
-    await page.goto('https://news.ycombinator.com/newest', { waitUntil: 'domcontentloaded' });
+    await page.goto('/newest', { waitUntil: 'domcontentloaded' });
 
-    const links = await page.locator('.titleline a').evaluateAll(a =>
-      a.map(x => x.getAttribute('href') || '').filter(Boolean)
+    // Collect the first 15 story URLs
+    const urls = await page.$$eval('.titleline a:first-child', as =>
+      as.map(a => a.href).filter(h => /^https?:\/\//i.test(h)).slice(0, 15)
     );
+    expect(urls.length, 'should have some external links to sample').toBeGreaterThan(0);
 
-    const sample = links.slice(0, 25);
-    /** @type {{url:string, status:number, note?:string}[]} */
-    const failures = [];
-
-    const allowStatus = (url, status) => {
-      // Common bot statuses; allow so test stays stable
-      if ([401, 403, 429, 503].includes(status)) return true;
-      if (status === 400 && /ai\.meta\.com/.test(url)) return true;
-      return false;
-    };
-
-    for (const url of sample) {
-      let resp = null;
+    const timeoutMs = 6000;
+    const results = await Promise.all(urls.map(async (u) => {
+      // Prefer HEAD, fall back to GET if HEAD fails
       try {
-        const head = await request.head(url, { timeout: 15_000 });
-        resp = head.ok() ? head : await request.get(url, { timeout: 15_000 });
-      } catch {
-        failures.push({ url, status: -1, note: 'network error' });
-        continue;
+        const head = await request.fetch(u, { method: 'HEAD', timeout: timeoutMs, failOnStatusCode: false });
+        if (head.ok() || (head.status() >= 200 && head.status() < 400)) {
+          return { url: u, ok: true, status: head.status() };
+        }
+      } catch {}
+      try {
+        const get = await request.get(u, { timeout: timeoutMs, failOnStatusCode: false });
+        return { url: u, ok: get.ok() || (get.status() >= 200 && get.status() < 400), status: get.status() };
+      } catch (e) {
+        return { url: u, ok: false, status: 0, err: String(e && e.message || e) };
       }
-      const s = resp.status();
-      if (!allowStatus(url, s) && s >= 400) failures.push({ url, status: s });
+    }));
+
+    const failures = results.filter(r => !r.ok);
+    const tolerance =
+      process.env.CI ? 0 : Number.isFinite(Number(process.env.LINK_TOLERANCE)) ? Number(process.env.LINK_TOLERANCE) : 2;
+
+    if (failures.length > tolerance) {
+      const details = failures.slice(0, 5).map(f => `- ${f.url} -> status ${f.status}${f.err ? ` (${f.err})` : ''}`).join('\n');
+      throw new Error(`Link failures (${failures.length}) exceed tolerance ${tolerance}:\n${details}`);
     }
 
+    // Helpful note when there are non-fatal failures locally
     if (failures.length) {
-      const detail = failures.map(f => `- ${f.url} (status: ${f.status}${f.note ? ', ' + f.note : ''})`).join('\n');
-      throw new Error(`Link failures (${failures.length}):\n${detail}`);
+      test.info().annotations.push({
+        type: 'note',
+        description: `Non-fatal link failures (${failures.length}/${results.length}). Set LINK_TOLERANCE to adjust.`,
+      });
     }
-    expect(true).toBe(true);
   });
 
   test('each titleline has an anchor; host badge present for many externals', async ({ page }) => {

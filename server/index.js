@@ -1,8 +1,11 @@
 // server/index.js
 
 /*
-    
+  - Serves the UI and streams Playwright runs over SSE.
+  - Supports saved creds and short-lived tokens for auth tests.
+  - Passes creds to auth-check.js via CLI args for reliability.
 */
+
 const express = require('express');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -47,7 +50,7 @@ setInterval(() => {
 app.use(express.static(PUBLIC_DIR));
 
 // ---------- Test listing ----------
-app.get('/api/tests', (req, res) => {
+app.get('/api/tests', (_req, res) => {
   const files = fs.existsSync(TEST_DIR)
     ? fs.readdirSync(TEST_DIR).filter(f => f.endsWith('.spec.js'))
     : [];
@@ -91,7 +94,7 @@ function runSSE(req, res, cmd, args, extraEnv = {}) {
   });
 
   const child = spawn(cmd, args, {
-    shell: false,        // better cross-platform behavior with explicit binaries
+    shell: false,        // explicit binaries for cross-platform
     cwd: ROOT,
     env: {
       ...process.env,
@@ -146,7 +149,17 @@ app.get('/api/stream-test/:name', (req, res) => {
       res.write('data: [TEST_EXIT_CODE] 1\n\n');
       return res.end();
     }
-    return runSSE(req, res, process.execPath, [path.relative(ROOT, file)], { HN_USER, HN_PASS });
+
+    const nodeBin = process.execPath;
+    const args = [
+      path.relative(ROOT, file),
+      `--user=${JSON.stringify(HN_USER)}`,
+      `--pass=${JSON.stringify(HN_PASS)}`,
+    ];
+    // allow headed = 1|true
+    if (headed === '1' || headed === 'true') args.push('--headed=1');
+
+    return runSSE(req, res, nodeBin, args, { HN_USER, HN_PASS });
   }
 
   // Playwright test file
@@ -176,7 +189,7 @@ app.get('/api/stream-test/:name', (req, res) => {
 app.post('/api/abort/:name', (_req, res) => res.json({ ok: true }));
 
 // ---------- SPA fallback (safe for Express v5 path-to-regexp) ----------
-app.get(/^\/(?!api\/).*/, (req, res) => {
+app.get(/^\/(?!api\/).*/, (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });
 

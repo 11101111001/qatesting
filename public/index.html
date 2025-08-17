@@ -11,33 +11,17 @@
   <div id="app" class="max-w-4xl mx-auto p-6 text-slate-900">
     <h1 class="text-2xl font-bold mb-4 text-white drop-shadow">Hacker News Test Application</h1>
 
-    <!-- Credentials Card -->
+    <!-- Auth notice (no creds UI because HN often blocks automation with validation) -->
     <div class="mb-6 rounded-2xl shadow p-4 border bg-white/90 backdrop-blur">
-      <h2 class="text-lg font-medium mb-3">Login credentials</h2>
-      <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
-        <label class="block sm:col-span-1">
-          <span class="text-sm">Username</span>
-          <input v-model="authUser" class="mt-1 w-full border rounded px-3 py-2" placeholder="hn username" />
-        </label>
-        <label class="block sm:col-span-1">
-          <span class="text-sm">Password</span>
-          <input v-model="authPass" :type="showPw ? 'text' : 'password'" class="mt-1 w-full border rounded px-3 py-2" placeholder="••••••••" />
-        </label>
-        <div class="flex gap-2 sm:col-span-2">
-          <button @click="showPw = !showPw" class="border rounded px-3 py-2">
-            {{ showPw ? 'Hide' : 'Show' }} PW
-          </button>
-          <button @click="saveCreds" :disabled="savingCreds" class="bg-gray-800 text-white rounded px-3 py-2 disabled:opacity-60">
-            {{ savingCreds ? 'Saving…' : 'Save' }}
-          </button>
-          <button @click="verifyLoginNow" class="bg-emerald-600 text-white rounded px-3 py-2">
-            Verify login
-          </button>
-        </div>
-      </div>
-      <p class="text-xs text-gray-500 mt-2">Credentials are saved in-memory on the server and injected as <code>HN_USER</code>/<code>HN_PASS</code> when tests run.</p>
-      <p v-if="saveMsg" class="text-sm mt-2" :class="saveMsg.startsWith('Failed') ? 'text-red-600' : 'text-emerald-700'">
-        {{ saveMsg }}
+      <h2 class="text-lg font-medium mb-2">Authentication tests</h2>
+      <p class="text-sm text-gray-700">
+        HN login is frequently protected by a manual “Validation required” step, so this runner skips auth tests by default.
+        The rest of the suite (content, tabs, links, performance, etc.) is fully automated and cross-browser.
+      </p>
+      <p class="text-xs text-gray-500 mt-2">
+        If you really need to probe credentials locally, run the CLI check:
+        <code>HN_USER=&lt;user&gt; HN_PASS=&lt;pass&gt; node auth-check.js</code>.
+        Expect it to report “validation required” on many networks.
       </p>
     </div>
 
