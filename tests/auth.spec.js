@@ -2,105 +2,70 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Bonus: login flow (skip if challenged)
+ * Simple, validation-safe auth checks.
+ * - Does not assert successful login (HN often requires manual validation).
+ * - Verifies form presence, fill behavior, and safe handling of bad creds.
  *
- * What we do
- * - Invalid login: prove we are NOT authenticated afterward. Treat "Validation required"
- *   as a NOT-logged-in signal as well.
- * - Valid login: only runs when HN_USER/HN_PASS are set AND no validation gate appears.
- *   If the gate appears, we skip to avoid flakes.
- *
- * Notes
- * - No beforeAll with { page } — page/context are per-test fixtures.
- * - The selectors are scoped to the LOGIN form (the one whose submit value is "login").
+ * To skip by default:
+ *   SKIP_AUTH=1 npx playwright test
  */
 
-async function gotoLogin(page) {
-  await page.goto('/login?goto=news', { waitUntil: 'domcontentloaded' });
-
-  // If HN shows a validation gate, surface that to the caller.
-  const gated = await page.getByText(/validation required/i).isVisible().catch(() => false);
-
-  // Find the login form specifically (not the account creation form).
-  const loginForm = page.locator('form').filter({
-    has: page.locator('input[type="submit"][value="login"]'),
-  });
-
-  return { gated, loginForm };
-}
+const skipAuth = process.env.SKIP_AUTH === '1';
 
 test.describe('Bonus: login flow (skip if challenged)', () => {
-  test('invalid login keeps you logged out (shows error or login still visible)', async ({ page }) => {
-    const { gated, loginForm } = await gotoLogin(page);
+  test.skip(skipAuth, 'Auth tests skipped by SKIP_AUTH=1');
 
-    // If we are gated, that's already "not logged in" — no need to submit.
-    if (!gated) {
-      // Fill with obviously bad credentials (do not collide with real accounts).
-      await loginForm.locator('input[name="acct"]').first().fill(`_invalid_${Date.now()}`);
-      await loginForm.locator('input[name="pw"]').first().fill('badpassword123');
+  test('login form renders and accepts input', async ({ page }) => {
+    await page.goto('https://news.ycombinator.com/login?goto=news', { waitUntil: 'domcontentloaded' });
 
-      await Promise.all([
-        page.waitForLoadState('domcontentloaded'),
-        loginForm.locator('input[type="submit"][value="login"]').first().click(),
-      ]);
-    }
+    // Scope to the LOGIN (not CREATE) form by submit value
+    const loginForm = page.locator('form').filter({
+      has: page.locator('input[type="submit"][value="login"]'),
+    });
 
-    // Signals that we are *still anonymous*:
-    const badBanner = await page.getByText(/bad login/i).isVisible().catch(() => false);
-    const stillOnLogin = /\/login\b/i.test(page.url());
-    const headerLoginLink = await page.getByRole('link', { name: /^login$/i }).isVisible().catch(() => false);
-    const loginFormVisible = await page
-      .locator('form')
-      .filter({ has: page.locator('input[type="submit"][value="login"]') })
-      .isVisible()
-      .catch(() => false);
+    await expect(loginForm, 'Login form should be visible').toBeVisible();
 
-    const validationGate = await page.getByText(/validation required/i).isVisible().catch(() => false);
+    const user = loginForm.locator('input[name="acct"]');
+    const pass = loginForm.locator('input[name="pw"]');
 
-    const anonymous =
-      badBanner ||
-      stillOnLogin ||
-      headerLoginLink ||
-      loginFormVisible ||
-      validationGate;
+    await expect(user, 'Username field visible').toBeVisible();
+    await expect(pass, 'Password field visible').toBeVisible();
 
-    if (!anonymous) {
-      const snippet = (await page.locator('body').innerText().catch(() => '') || '').slice(0, 200);
-      throw new Error(`Should see "Bad login", or still be on the login form, or see the "login" link.\nurl=${page.url()}\nsnippet="${snippet}"`);
-    }
+    await user.fill('dummy-user');
+    await pass.fill('dummy-pass');
+    await expect(user, 'Username should contain typed text').toHaveValue('dummy-user');
   });
 
-  test('valid login shows logout + user link; then logout returns to anonymous', async ({ page }) => {
-    // Allow skipping via env var or missing creds.
-    const SKIP = process.env.SKIP_AUTH === '1' || process.env.HN_SKIP_AUTH === '1';
-    test.skip(SKIP, 'Auth is disabled via SKIP_AUTH/HN_SKIP_AUTH');
+  test('invalid login keeps you logged out (shows error banner or remains on form)', async ({ page }) => {
+    await page.goto('https://news.ycombinator.com/login?goto=news', { waitUntil: 'domcontentloaded' });
 
-    const user = process.env.HN_USER;
-    const pass = process.env.HN_PASS;
-    test.skip(!user || !pass, 'HN_USER/HN_PASS not set');
+    const loginForm = page.locator('form').filter({
+      has: page.locator('input[type="submit"][value="login"]'),
+    });
 
-    const { gated, loginForm } = await gotoLogin(page);
-    test.skip(gated, 'Validation gate present — skipping auth test to avoid flakiness');
+    await expect(loginForm, 'Login form visible before submit').toBeVisible();
+    await loginForm.locator('input[name="acct"]').fill('totally-bad-user');
+    await loginForm.locator('input[name="pw"]').fill('totally-bad-pass');
 
-    // Fill and submit
-    await loginForm.locator('input[name="acct"]').first().fill(user);
-    await loginForm.locator('input[name="pw"]').first().fill(pass);
     await Promise.all([
       page.waitForLoadState('domcontentloaded'),
-      loginForm.locator('input[type="submit"][value="login"]').first().click(),
+      loginForm.locator('input[type="submit"][value="login"]').click(),
     ]);
 
-    // Prove we are logged in
-    await expect(page.getByRole('link', { name: /^logout$/i })).toBeVisible();
+    // Hard "not logged in" checks: no logout link
+    const loggedOut = !(await page.getByRole('link', { name: /^logout$/i }).isVisible().catch(() => false));
+    await expect(loggedOut, 'Should not show a "logout" link after bad login').toBe(true);
 
-    // Optional: username appears in top bar when logged in (link to /user?id=<name>)
-    await expect(page.getByRole('link', { name: new RegExp(`^${user}$`, 'i') })).toBeVisible();
+    // Accept either banner or remaining on login page
+    const badLoginBanner = page.getByText(/bad login/i);
+    const validationBanner = page.getByText(/validation required/i);
+    const stillOnForm = loginForm.first();
 
-    // Log out and ensure we return to anonymous
-    await Promise.all([
-      page.waitForLoadState('domcontentloaded'),
-      page.getByRole('link', { name: /^logout$/i }).click(),
-    ]);
-    await expect(page.getByRole('link', { name: /^login$/i })).toBeVisible();
+    const anySignal =
+      (await badLoginBanner.isVisible().catch(() => false)) ||
+      (await validationBanner.isVisible().catch(() => false)) ||
+      (await stillOnForm.isVisible().catch(() => false));
+
+    await expect(anySignal, 'Should show "Bad login", or still be on the login form, or see a validation banner').toBe(true);
   });
 });
