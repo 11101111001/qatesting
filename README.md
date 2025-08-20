@@ -29,6 +29,7 @@ npm run start
 ```
 
 Open **http://localhost:3000** and click **Run** on any test. You can **Abort** a running test or **Reset** all statuses/logs at any time.
+Users on **windows** must run this in WSL due to test pathing requirements.
 
 ---
 
@@ -40,11 +41,18 @@ Open **http://localhost:3000** and click **Run** on any test. You can **Abort** 
 - Normalizes timestamps (prefers ISO in `title` attr; falls back to parsing relative age).
 - Asserts timestamps are **non-increasing** (newest → oldest), allowing ties.
 
-### `smoke.spec.js`
+### `ask-show-hueristics.spec.js`
 
-- `/newest` loads and URL matches.
-- Header link “Hacker News” is visible.
-- Clicking **More** changes the first row (sanity pagination check).
+- /show: grabs the first ~20 titles and asserts that a strong portion start with “Show HN” (threshold + sanity minimum).
+- /ask: grabs the first ~20 titles and asserts that a strong portion start with “Ask HN” (threshold + sanity minimum).
+- Guarantees at least one visible row before evaluating counts.
+
+### `auth.spec.js`
+
+- This test **may** fail if many attempts have been made or if HN throws a reCAPTCHA.
+- **Invalid login**: stays unauthenticated; shows the **login** link.
+- **Valid login**: logs in, then logs out (best-effort).
+- If a CAPTCHA/human-check is detected **or** credentials are missing, tests **skip** (environmental).
 
 ### `console.spec.js`
 
@@ -58,12 +66,31 @@ Open **http://localhost:3000** and click **Run** on any test. You can **Abort** 
   - a visible relative age (e.g., “3 hours ago”).
 - All `id`s on the page are **unique**.
 
+### `footer-search.spec.js`
+
+- From /newest, uses the footer search form (field q) to search for “apple”.
+- Verifies redirect to hn.algolia.com/?q=apple.
+- Asserts Algolia results render: container visible and multiple article.Story cards present.
+
 ### `header.spec.js`
 
 - A direct HTTP GET to `https://news.ycombinator.com/newest`:
   - returns 2xx and `Content-Type: text/html`.
   - includes a `Cache-Control` header.
 - `https://news.ycombinator.com/robots.txt` exists and is non-empty.
+
+### `host-badges.spec.js`
+
+- On /newest, among the first ~30 rows, counts visible host/domain badges near titles (e.g., span.sitebit).
+- Expects at least a handful to show host badges (internal posts like Ask/Show HN won’t have them).
+
+### `item-structure.spec.js`
+
+- From /newest, navigates to an item with N comments (falls back to age link if necessary).
+- On the item page:
+  - verifies header (table.fatitem),
+  - title link, author (hnuser), and age link are visible,
+  - comment rows (tr.comtr) are listed when applicable.
 
 ### `links.spec.js`
 
@@ -72,10 +99,63 @@ Open **http://localhost:3000** and click **Run** on any test. You can **Abort** 
 - Treats major bot blocks (e.g., 403) as **skips**; otherwise expects **< 400** status.
   > Some publishers gate with 400/403/anti-bot; the test logs these and continues.
 
+### `newcomment.spec.js`
+
+- Visits /newcomments and verifies that each of the first ~10 comment rows has:
+  - a visible username (a.hnuser),
+  - a visible age link (span.age a),
+  - visible comment text (non-empty).
+
+### `past-navigation`
+
+- Visits /front and clicks a day link (/front?day=YYYY-MM-DD).
+- On the chosen day page, asserts the item table renders and at least one story row is visible.
+
 ### `performance.spec.js`
 
 - Reports Navigation Timing metrics for `/newest` (`domContentLoaded`, `load`, `transferSize`, etc.).
 - Verifies we can enumerate `performance` resource entries.
+
+### `profile-ordering.spec.js`
+
+- User submissions ordering on /submitted?id=user (default dang; override with HN_PROFILE_USER=pg).
+- Extracts timestamps from the meta row (relative “ago”, on … absolute, or title attribute).
+- Asserts newest → oldest, allowing ties (same bucket label) and tiny jitter.
+- If user does not have submissions, test will fail.
+
+### `profile.spec.js`
+
+- Profile page (/user?id=user): asserts core fields (user id, created/karma) and presence of Submissions / Comments / Favorites links.
+- Submissions tab: shows a visible list of submission rows with title links.
+- Comments tab: shows visible comment rows/snippets.
+- Favorites tab: loads and shows either favorites or a valid empty state.
+
+### `search-ordering.spec.js`
+
+- Algolia query “apple” with type=story:
+  - Sort by Date (all time): collects timestamps from each result and asserts descending order (ties + small jitter allowed).
+  - Sort by Date (Past Week): asserts all results are within the last 7 days and descending.
+- Timestamps parsed from each result’s “X units ago” anchor or absolute date.
+
+### `search.spec.js`
+
+- Algolia basic visibility at https://hn.algolia.com/?q=apple:
+  - results container visible,
+  - multiple article.Story cards,
+  - each card has a visible title link with http(s) href,
+  - and an HN discussion link (news.ycombinator.com/item?id=…).
+
+### `smoke.spec.js`
+
+- `/newest` loads and URL matches.
+- Header link “Hacker News” is visible.
+- Clicking **More** changes the first row (sanity pagination check).
+
+### `submit.spec.js`
+
+- Anonymous user: visiting /submit redirects to the login page.
+- Authenticated (when HN_USER/HN_PASS provided and no human-check): the submit form is visible.
+- If a validation/CAPTCHA flow is detected, the test skips rather than fails.
 
 ### `tabs.spec.js`
 
@@ -86,13 +166,6 @@ Open **http://localhost:3000** and click **Run** on any test. You can **Abort** 
 - **Past**: front page with days displays and paginates.
 
 > These are written to be **resilient** to content changes; they assert presence of key elements rather than exact text.
-
-### `auth.spec.js`
-
-- skipped by default, HN throws reCAPTCHA. Against TOS to attempt to bypass...
-- **Invalid login**: stays unauthenticated; shows the **login** link.
-- **Valid login**: logs in, then logs out (best-effort).
-- If a CAPTCHA/human-check is detected **or** credentials are missing, tests **skip** (environmental).
 
 ---
 
