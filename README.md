@@ -97,7 +97,8 @@ Users on **windows** must run this in WSL due to test pathing requirements.
 - On `/newest`, collects a small sample of story links (be polite).
 - Tries `HEAD`, falls back to `GET`.
 - Treats major bot blocks (e.g., 403) as **skips**; otherwise expects **< 400** status.
-  > Some publishers gate with 400/403/anti-bot; the test logs these and continues.
+
+> Some publishers gate with 400/403/anti-bot; the test logs these and continues.
 
 ### `newcomment.spec.js`
 
