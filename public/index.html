@@ -69,7 +69,8 @@
         </div>
       </div>
 
-      <pre v-if="t.showLogs"
+      <!-- use v-show so visibility stays as the user set it -->
+      <pre v-show="t.showLogs"
            class="mt-2 bg-black text-slate-50 p-3 rounded h-60 overflow-auto whitespace-pre-wrap">{{ t.logs.join('\n') }}</pre>
     </div>
   </div>

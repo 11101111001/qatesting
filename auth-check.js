@@ -16,13 +16,18 @@ function argFlag(name) {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+async function readBody(page, limit = 2000) {
+  const raw = (await page.textContent('body').catch(() => '')) || '';
+  return raw.replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
 async function main() {
   const user = argJSON('user') || process.env.HN_USER || '';
   const pass = argJSON('pass') || process.env.HN_PASS || '';
   const headed = argFlag('headed');
 
   if (!user || !pass) {
-    console.log('Usage: HN_USER=... HN_PASS=... node auth-check.js  (or --user= --pass=)');
+    console.log('Usage: HN_USER=... HN_PASS=... node auth-check.js  (or --user= --pass=) [--headed]');
     process.exit(1);
   }
 
@@ -46,51 +51,76 @@ async function main() {
   try {
     await page.goto('/login?goto=news', { waitUntil: 'domcontentloaded' });
 
-    const loginForm = page.locator('form').filter({
-      has: page.locator('input[type="submit"][value="login"]'),
-    });
-
-    await loginForm.locator('input[name="acct"]').first().fill(user);
-    await loginForm.locator('input[name="pw"]').first().fill(pass);
+    // FIRST form[action="login"] is the actual login form (second is create account)
+    const loginForm = page.locator('form[action="login"]').first();
+    await loginForm.locator('input[name="acct"]').fill(user);
+    await loginForm.locator('input[name="pw"]').fill(pass);
 
     await Promise.all([
-      page.waitForLoadState('networkidle'),
       loginForm.locator('input[type="submit"][value="login"]').first().click(),
+      page.waitForLoadState('domcontentloaded'),
+    ]);
+
+    // Wait up to 6s for any state to appear
+    const postSubmit = await Promise.race([
+      page.getByRole('link', { name: /^logout$/i }).first()
+        .waitFor({ state: 'visible', timeout: 6000 }).then(() => 'logout').catch(() => null),
+      page.locator('body :text("Bad login")')
+        .waitFor({ state: 'visible', timeout: 6000 }).then(() => 'badlogin').catch(() => null),
+      page.locator('body :text=/validation required/i')
+        .waitFor({ state: 'visible', timeout: 6000 }).then(() => 'validation').catch(() => null),
+      page.locator('.g-recaptcha, iframe[src*="recaptcha"]').first()
+        .waitFor({ state: 'visible', timeout: 6000 }).then(() => 'validation').catch(() => null),
+      page.waitForURL(/\/login(\?|$)/, { timeout: 6000 })
+        .then(() => 'stilllogin').catch(() => null),
+      loginForm.waitFor({ state: 'visible', timeout: 6000 })
+        .then(() => 'stilllogin').catch(() => null),
     ]);
 
     const cookies = await context.cookies(['https://news.ycombinator.com/']);
     const hasUserCookie = cookies.some(c => c.name === 'user');
-    const hasLogout = await page.getByRole('link', { name: 'logout' }).first().isVisible().catch(() => false);
-    const bodyText = (await page.locator('body').innerText().catch(() => '') || '')
-      .replace(/\s+/g, ' ')
-      .slice(0, 600);
+    const hasLogout = await page.getByRole('link', { name: /^logout$/i }).first().isVisible().catch(() => false);
 
-    const badLogin = /bad login/i.test(bodyText);
-    const validationReq = /validation required/i.test(bodyText) || /email hn@ycombinator\.com/i.test(bodyText);
-    const challenge = /verify|captcha|are you human|unusual|blocked|try again later|suspicious/i.test(bodyText);
-    const hasLoginLink = await page.getByRole('link', { name: /^login$/i }).first().isVisible().catch(() => false);
-    const stillOnLogin = page.url().includes('/login') && (await loginForm.count().catch(() => 0)) > 0;
+    const body = await readBody(page);
+    const recaptchaCount = await page.locator('.g-recaptcha, iframe[src*="recaptcha"]').count().catch(() => 0);
 
-    console.log(
-      `[AUTHCHECK] diag url=${page.url()} cookie=${hasUserCookie} ` +
-      `logout=${hasLogout} loginLink=${hasLoginLink} onLogin=${stillOnLogin} ` +
-      `snippet="${bodyText}"`
-    );
+    const badLogin = /bad login/i.test(body);
+    const validationReq = /validation required/i.test(body) || /hn@ycombinator\.com/i.test(body) || recaptchaCount > 0;
+    const challenge = /captcha|are you human|verify(?!.*logout)|unusual|blocked|try again later|suspicious/i.test(body);
+    const stillOnLogin = /\/login(\?|$)/.test(page.url());
 
-    if (hasUserCookie || hasLogout) {
+    // One-line JSON diagnostic (easy for humans & machines)
+    const diag = {
+      url: page.url(),
+      postSubmit,
+      cookieUser: hasUserCookie,
+      hasLogout,
+      badLogin,
+      validationReq,
+      challenge,
+      recaptchaCount,
+      stillOnLogin,
+      snippet: body,
+    };
+    console.log('[AUTHCHECK]', JSON.stringify(diag));
+
+    // Exit code mapping (keep order: success first, then specific failures)
+    if (hasUserCookie || hasLogout || postSubmit === 'logout') {
+      // success
       console.log('[AUTHCHECK] success');
-      await page.getByRole('link', { name: 'logout' }).first().click().catch(() => {});
+      // best-effort logout so we don’t leave sessions around
+      await page.getByRole('link', { name: /^logout$/i }).first().click().catch(() => {});
       await browser.close();
       process.exit(0);
     }
 
-    if (validationReq) {
+    if (validationReq || postSubmit === 'validation') {
       console.log('[AUTHCHECK] validation required');
       await browser.close();
-      process.exit(6); // distinct exit for UI
+      process.exit(6); // distinct code for UI to show “verification required”
     }
 
-    if (badLogin) {
+    if (badLogin || postSubmit === 'badlogin') {
       console.log('[AUTHCHECK] fail: bad credentials');
       await browser.close();
       process.exit(2);
@@ -102,7 +132,7 @@ async function main() {
       process.exit(3);
     }
 
-    if (stillOnLogin || hasLoginLink) {
+    if (stillOnLogin || postSubmit === 'stilllogin') {
       console.log('[AUTHCHECK] fail: still anonymous after submit');
       await browser.close();
       process.exit(4);

@@ -205,53 +205,26 @@ npx playwright show-report
 
 ## Login & Submit (optional)
 
-### Option A — Shell environment
+### Shell environment
 
 Set environment variables (recommended for CI/local shell):
 
 ### macOS/Linux
 
 ```bash
-export HN_USER="your_username"
-export HN_PASS="your_password"
-npx playwright test tests/auth.spec.js
+HN_USER="username" HN_PASS="password" node auth-check.js
 ```
 
 ### Windows PowerShell
 
 ```powershell
-$env:HN_USER="your_username"; $env:HN_PASS="your_password"
-npx playwright test tests/auth.spec.js
+$env:HN_USER="your_username"; $env:HN_PASS="your_password"; node auth-check.js
 ```
-
-### Option B — From the UI
-
-- Use the **Credentials** card to enter username/password and click **Save**.
-- The server stores them **in memory** for this session and uses them only to spawn the test process with `HN_USER` / `HN_PASS`.
 
 ## Notes
 
 - Hacker News may present a **human-check / CAPTCHA**. When detected, the tests **skip** (do not fail) and log why.
 - We never persist credentials to disk or log them.
-
----
-
-## CLI: Ordering Check
-
-There’s a simple CLI that verifies **ordering** of the first N items on `/newest` and can write a Markdown report.
-
-```bash
-# Headless (default), first 100, write a report
-node index.js --limit=100 --report newest.md
-
-# With a screenshot of /newest
-node index.js --limit=50 --screenshot newest.png
-
-# Turn off headless if you want to watch the browser
-node index.js --limit=100 --headless=false
-```
-
-Exit code is **0** when ordering looks correct, **1** otherwise.
 
 ---
 

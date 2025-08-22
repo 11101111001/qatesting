@@ -23,7 +23,7 @@ createApp({
         status: 'idle',      // idle | running | pass | fail | aborted | error
         statusText: '',
         logs: [],
-        showLogs: false,
+        showLogs: false,     // user toggles this; we won't touch it on run
         startedAt: 0,
         timerId: null,
       }));
@@ -52,8 +52,7 @@ createApp({
       }
     },
     verifyLoginNow() {
-      // Run the node script (auth-check)
-      // Present it as a pseudo-test row at the top.
+      // Optional: this pseudo-test starts with logs open to show the check
       const name = 'auth-check';
       let t = this.tests.find(x => x.name === name);
       if (!t) {
@@ -76,8 +75,8 @@ createApp({
 
       t.status = 'running';
       t.statusText = 'starting…';
-      t.logs = [];
-      t.showLogs = false; // collapsed by default
+      t.logs = [];            // clear logs for the new run
+      // DO NOT touch t.showLogs here (preserve user’s open/closed choice)
       t.startedAt = Date.now();
 
       const TIMEOUT_MS = 90_000; // 90s per run
@@ -188,7 +187,7 @@ createApp({
         t.status = 'idle';
         t.statusText = '';
         t.logs = [];
-        t.showLogs = false;
+        t.showLogs = false; // closed on Reset only
       }
       this.saveMsg = '';
     },
