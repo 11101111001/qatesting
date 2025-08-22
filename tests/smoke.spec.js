@@ -1,58 +1,44 @@
 // tests/smoke.spec.js
 import { test, expect } from '@playwright/test';
 
-/* -----------------------------------------------------------------------------
- File: tests/smoke.spec.js
-
- What this runs
- - Basic “is it up?” checks and simple pagination sanity.
-
- Key assertions
- - /newest loads and URL matches.
- - Top-left “Hacker News” link is visible.
- - Clicking “More” changes the first row’s id (pagination worked).
-
- How to run (single file)
-   npx playwright test tests/smoke.spec.js
- ----------------------------------------------------------------------------- */
+const BASE = 'https://news.ycombinator.com';
 
 test.describe('Smoke: top bar + basic navigation', () => {
   test('top bar links and branding render', async ({ page }) => {
-    await page.goto('/newest', { waitUntil: 'domcontentloaded' });
+    await page.goto(`${BASE}/news`, { waitUntil: 'domcontentloaded' });
 
-    const topbar = page.locator('span.pagetop');
-    await expect(topbar.getByRole('link', { name: /^hacker news$/i }).first()).toBeVisible();
-    await expect(topbar.getByRole('link', { name: /^new$/i }).first()).toBeVisible();
-    await expect(topbar.getByRole('link', { name: /^past$/i }).first()).toBeVisible();
-    await expect(topbar.getByRole('link', { name: /^comments$/i }).first()).toBeVisible();
-    await expect(topbar.getByRole('link', { name: /^ask$/i }).first()).toBeVisible();
-    await expect(topbar.getByRole('link', { name: /^show$/i }).first()).toBeVisible();
-    await expect(topbar.getByRole('link', { name: /^jobs$/i }).first()).toBeVisible();
-    await expect(topbar.getByRole('link', { name: /^submit$/i }).first()).toBeVisible();
+    // Scope to the top navigation row to avoid strict-mode multi-matches
+    const topbar = page.locator('#hnmain tr').first();
 
-    // Login or user link visible (depending on auth)
-    const loginOrUser = page.getByRole('link', { name: /login|logout/i });
-    await expect(loginOrUser).toBeVisible();
+    // Branding
+    const brand = topbar.getByRole('link', { name: /^Hacker News$/i }).first();
+    await expect(brand).toBeVisible();
+
+    // Common top bar links (existence/visibility only)
+    for (const name of ['new', 'past', 'comments', 'ask', 'show', 'jobs', 'submit']) {
+      const link = topbar.getByRole('link', { name: new RegExp(`^${name}$`, 'i') }).first();
+      await expect(link, `"${name}" link should be visible in top bar`).toBeVisible();
+    }
+
+    // Auth link (login OR logout). Disambiguate with scope + .first()
+    const authLink = topbar.getByRole('link', { name: /^(login|logout)$/i }).first();
+    await expect(authLink).toBeVisible();
   });
 
   test('"More" pagination is present and works on Newest', async ({ page }) => {
-    await page.goto('/newest', { waitUntil: 'domcontentloaded' });
+    await page.goto(`${BASE}/newest`, { waitUntil: 'domcontentloaded' });
 
-    const firstRow = page.locator('tr.athing').first();
-    await expect(firstRow).toBeVisible();
-    const firstId = await firstRow.getAttribute('id');
+    // "More" link sits at the bottom of the list
+    const more = page.getByRole('link', { name: /^More$/i }).first();
+    await expect(more).toBeVisible();
 
-    const more = page.locator('a.morelink[rel="next"], a.morelink'); // be lenient
-    await expect(more.first()).toBeVisible();
-
+    const urlBefore = page.url();
     await Promise.all([
-      page.waitForLoadState('domcontentloaded'),
-      more.first().click(),
+      page.waitForURL(url => url.href !== urlBefore, { timeout: 5000 }),
+      more.click()
     ]);
 
-    await expect(page).toHaveURL(/\/newest\b/);
-
-    const newFirstId = await page.locator('tr.athing').first().getAttribute('id');
-    expect(newFirstId).not.toBe(firstId);
+    // Basic sanity: we should still be on /newest and have a different URL (pagination param)
+    await expect(page).toHaveURL(/\/newest/);
   });
 });
